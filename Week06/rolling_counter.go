@@ -5,52 +5,53 @@ import (
 	"time"
 )
 
-// Number tracks a numberBucket over a bounded number of
-// time buckets. Currently the buckets are one second long and only the last 10 seconds are kept.
-type Number struct {
-	Buckets map[int64]*numberBucket
+//滑动计数器, 不可配置, 10秒窗口的滑动计数
+var (
+	timeSpan int64 = 10
+)
+
+type Counter struct {
+	Buckets map[int64]*Bucket
 	Mutex   *sync.RWMutex
 }
 
-type numberBucket struct {
+type Bucket struct {
 	Value float64
 }
 
-// NewNumber initializes a RollingNumber struct.
-func NewNumber() *Number {
-	r := &Number{
-		Buckets: make(map[int64]*numberBucket),
+func NewCounter() *Counter {
+	r := &Counter{
+		Buckets: make(map[int64]*Bucket),
 		Mutex:   &sync.RWMutex{},
 	}
 	return r
 }
 
-func (r *Number) getCurrentBucket() *numberBucket {
+func (r *Counter) GetBucket() *Bucket {
 	now := time.Now().Unix()
-	var bucket *numberBucket
+	var bucket *Bucket
 	var ok bool
 
 	if bucket, ok = r.Buckets[now]; !ok {
-		bucket = &numberBucket{}
+		bucket = &Bucket{}
 		r.Buckets[now] = bucket
 	}
 
 	return bucket
 }
 
-func (r *Number) removeOldBuckets() {
-	now := time.Now().Unix() - 10
+func (r *Counter) RemoveBucket() {
+	now := time.Now().Unix() - timeSpan
 
 	for timestamp := range r.Buckets {
-		// TODO: configurable rolling window
 		if timestamp <= now {
 			delete(r.Buckets, timestamp)
 		}
 	}
 }
 
-// Increment increments the number in current timeBucket.
-func (r *Number) Increment(i float64) {
+//添加当前bucket
+func (r *Counter) Add(i float64) {
 	if i == 0 {
 		return
 	}
@@ -58,33 +59,20 @@ func (r *Number) Increment(i float64) {
 	r.Mutex.Lock()
 	defer r.Mutex.Unlock()
 
-	b := r.getCurrentBucket()
+	b := r.GetBucket()
 	b.Value += i
-	r.removeOldBuckets()
+	r.RemoveBucket()
 }
 
-// UpdateMax updates the maximum value in the current bucket.
-func (r *Number) UpdateMax(n float64) {
-	r.Mutex.Lock()
-	defer r.Mutex.Unlock()
-
-	b := r.getCurrentBucket()
-	if n > b.Value {
-		b.Value = n
-	}
-	r.removeOldBuckets()
-}
-
-// Sum sums the values over the buckets in the last 10 seconds.
-func (r *Number) Sum(now time.Time) float64 {
+//计算和
+func (r *Counter) Sum(now time.Time) float64 {
 	sum := float64(0)
 
 	r.Mutex.RLock()
 	defer r.Mutex.RUnlock()
 
 	for timestamp, bucket := range r.Buckets {
-		// TODO: configurable rolling window
-		if timestamp >= now.Unix()-10 {
+		if timestamp >= now.Unix()-timeSpan {
 			sum += bucket.Value
 		}
 	}
@@ -92,16 +80,15 @@ func (r *Number) Sum(now time.Time) float64 {
 	return sum
 }
 
-// Max returns the maximum value seen in the last 10 seconds.
-func (r *Number) Max(now time.Time) float64 {
+//计算最大值
+func (r *Counter) Max(now time.Time) float64 {
 	var max float64
 
 	r.Mutex.RLock()
 	defer r.Mutex.RUnlock()
 
 	for timestamp, bucket := range r.Buckets {
-		// TODO: configurable rolling window
-		if timestamp >= now.Unix()-10 {
+		if timestamp >= now.Unix()-timeSpan {
 			if bucket.Value > max {
 				max = bucket.Value
 			}
@@ -111,6 +98,7 @@ func (r *Number) Max(now time.Time) float64 {
 	return max
 }
 
-func (r *Number) Avg(now time.Time) float64 {
-	return r.Sum(now) / 10
+//计算窗口内平均值
+func (r *Counter) Avg(now time.Time) float64 {
+	return r.Sum(now) / float64(timeSpan)
 }
